@@ -31,6 +31,8 @@ const rawCache = new Map();
 const outputCache = new Map();
 const rateMap = new Map();
 const publicDir = path.join(process.cwd(), "public");
+const registeredRelaysPath = path.join(process.cwd(), "registered-relays.json");
+let registeredRelays = [];
 
 function now() {
   return Date.now();
@@ -89,6 +91,48 @@ function cleanupCaches() {
 }
 
 setInterval(cleanupCaches, 60_000).unref();
+
+async function loadRegisteredRelays() {
+  try {
+    const text = await fs.readFile(registeredRelaysPath, "utf8");
+    const data = JSON.parse(text);
+    registeredRelays = Array.isArray(data.relays) ? data.relays.filter((item) => item?.url).slice(0, 200) : [];
+  } catch {
+    registeredRelays = [];
+  }
+}
+
+async function saveRegisteredRelays() {
+  const data = JSON.stringify({ relays: registeredRelays }, null, 2);
+  await fs.writeFile(registeredRelaysPath, data);
+}
+
+function normalizeRelayUrl(input) {
+  const url = new URL(input);
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Relay url must be http or https");
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
+
+function getRelayUrls() {
+  const urls = [...FETCH_RELAYS, ...registeredRelays.map((relay) => relay.url)];
+  return [...new Set(urls.map((url) => url.trim()).filter(Boolean))];
+}
+
+async function registerRelay(relayUrl) {
+  const normalized = normalizeRelayUrl(relayUrl);
+  const existing = registeredRelays.find((relay) => relay.url === normalized);
+  const item = {
+    url: normalized,
+    registeredAt: existing?.registeredAt || new Date().toISOString(),
+    lastSeenAt: new Date().toISOString(),
+  };
+  registeredRelays = [item, ...registeredRelays.filter((relay) => relay.url !== normalized)].slice(0, 200);
+  await saveRegisteredRelays();
+  return item;
+}
 
 function getClientIp(req) {
   return req.socket.remoteAddress || "unknown";
@@ -660,9 +704,10 @@ async function fetchSourceAndParse(source, url, options) {
 
 async function fetchAndParseWithFallback(url, options) {
   const attempts = [];
-  const sources = [{ type: "direct", label: "direct" }, ...FETCH_RELAYS.map((relay) => ({ type: "relay", label: relay }))];
+  const relayUrls = getRelayUrls();
+  const sources = [{ type: "direct", label: "direct" }, ...relayUrls.map((relay) => ({ type: "relay", label: relay }))];
 
-  if (FETCH_RELAYS.length) {
+  if (relayUrls.length) {
     const pending = sources.map((source) =>
       fetchSourceAndParse(source, url, options)
         .then((result) => ({ ok: true, result }))
@@ -793,7 +838,7 @@ async function convertSubscription({ url, options = {} }) {
 
 async function convertSubscriptionWithRelays({ url, options = {} }) {
   const outputMode = options.outputMode === "full" ? "full" : "proxies";
-  const cacheKey = hash(JSON.stringify({ url, relays: FETCH_RELAYS, options: { ...options, outputMode } }));
+  const cacheKey = hash(JSON.stringify({ url, relays: getRelayUrls(), options: { ...options, outputMode } }));
   const cached = cacheGet(outputCache, cacheKey, true);
   if (cached && !cached.stale) return { yaml: cached.value, cached: true, stale: false };
 
@@ -912,6 +957,21 @@ export const server = http.createServer(async (req, res) => {
       return json(res, 200, result);
     }
 
+    if (req.method === "POST" && requestUrl.pathname === "/api/register-relay") {
+      if (!RELAY_SECRET) return json(res, 403, { error: "Relay registration is disabled" });
+      if (req.headers.authorization !== `Bearer ${RELAY_SECRET}`) return json(res, 401, { error: "Unauthorized relay registration" });
+      const body = await readRequestJson(req);
+      if (!body.url || typeof body.url !== "string") return json(res, 400, { error: "Missing relay url" });
+      const relay = await registerRelay(body.url);
+      return json(res, 200, { relay, count: getRelayUrls().length });
+    }
+
+    if (req.method === "GET" && requestUrl.pathname === "/api/relays") {
+      if (!RELAY_SECRET) return json(res, 403, { error: "Relay list is disabled" });
+      if (req.headers.authorization !== `Bearer ${RELAY_SECRET}`) return json(res, 401, { error: "Unauthorized relay list request" });
+      return json(res, 200, { relays: getRelayUrls() });
+    }
+
     if (req.method === "GET" && requestUrl.pathname.startsWith("/sub/")) {
       const token = requestUrl.pathname.slice("/sub/".length);
       const payload = decryptToken(token);
@@ -931,6 +991,7 @@ export const server = http.createServer(async (req, res) => {
 });
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  await loadRegisteredRelays();
   server.listen(PORT, HOST, () => {
     console.log(`Airport subscription converter listening at ${PUBLIC_BASE_URL}`);
   });

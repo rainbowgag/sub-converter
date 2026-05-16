@@ -9,9 +9,11 @@ PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
 FETCH_RELAYS="${FETCH_RELAYS:-}"
 RELAY_SECRET="${RELAY_SECRET:-}"
 SHORTENER_ENDPOINT="${SHORTENER_ENDPOINT:-https://d.flysub.org/short}"
+MAIN_SERVER="${MAIN_SERVER:-}"
 SERVICE_USER="${SERVICE_USER:-root}"
 ENV_FILE="/etc/${APP_NAME}.env"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
+EFFECTIVE_RELAY_SECRET=""
 
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -78,6 +80,7 @@ write_env_file() {
   else
     relay_secret="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
   fi
+  EFFECTIVE_RELAY_SECRET="$relay_secret"
 
   cat > "$ENV_FILE" <<EOF
 PORT=${PORT}
@@ -124,6 +127,26 @@ open_firewall_port() {
   fi
 }
 
+register_to_main_server() {
+  if [ -z "$MAIN_SERVER" ]; then
+    return
+  fi
+  if [ -z "$EFFECTIVE_RELAY_SECRET" ]; then
+    echo "MAIN_SERVER is set, but RELAY_SECRET is empty. Skipping relay registration."
+    return
+  fi
+
+  local relay_url
+  relay_url="$(detect_public_base_url)"
+  echo "Registering relay ${relay_url} to main server ${MAIN_SERVER}..."
+  curl -fsS --max-time 15 \
+    -H "Authorization: Bearer ${EFFECTIVE_RELAY_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d "{\"url\":\"${relay_url}\"}" \
+    "${MAIN_SERVER%/}/api/register-relay" \
+    || echo "Relay registration failed. You can rerun deploy later."
+}
+
 main() {
   need_root
   install_node20_if_needed
@@ -141,6 +164,7 @@ main() {
   systemctl daemon-reload
   systemctl enable "${APP_NAME}"
   systemctl restart "${APP_NAME}"
+  register_to_main_server
 
   echo
   echo "Deployment completed."

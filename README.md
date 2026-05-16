@@ -44,14 +44,17 @@ apt-get update
 apt-get install -y git curl ca-certificates
 ```
 
-## 5. 中继 VPS 一键部署
+## 5. 中继 VPS 一键部署并自动注册到主站
 
-把 `你的中继密钥` 换成第 3 步生成的密钥：
+把 `你的中继密钥` 换成第 3 步生成的密钥，把 `主站VPS_IP` 换成主站 IP：
 
 ```bash
 git clone https://github.com/rainbowgag/sub-converter.git
 cd sub-converter
-sudo RELAY_SECRET='你的中继密钥' PORT=3000 bash scripts/deploy-ubuntu.sh
+sudo RELAY_SECRET='你的中继密钥' \
+MAIN_SERVER='http://主站VPS_IP:3000' \
+PORT=3000 \
+bash scripts/deploy-ubuntu.sh
 ```
 
 如果已经部署过，只需要更新：
@@ -59,26 +62,35 @@ sudo RELAY_SECRET='你的中继密钥' PORT=3000 bash scripts/deploy-ubuntu.sh
 ```bash
 cd ~/sub-converter
 git pull
-sudo RELAY_SECRET='你的中继密钥' PORT=3000 bash scripts/deploy-ubuntu.sh
-```
-
-## 6. 主站配置中继列表
-
-回到主站 VPS，把所有中继 VPS 地址填进 `FETCH_RELAYS`。
-
-示例：
-
-```bash
-cd ~/sub-converter
-git pull
-
 sudo RELAY_SECRET='你的中继密钥' \
-FETCH_RELAYS='http://美国VPS_IP:3000,http://日本VPS_IP:3000,http://德国VPS_IP:3000' \
+MAIN_SERVER='http://主站VPS_IP:3000' \
 PORT=3000 \
 bash scripts/deploy-ubuntu.sh
 ```
 
-之后用户只访问主站：
+部署完成后，中继会自动注册到主站。以后新增中继 VPS，只需要在新中继上执行本步骤，不需要回主站改配置。
+
+## 6. 查看主站已注册中继
+
+在主站 VPS 执行：
+
+```bash
+curl -H "Authorization: Bearer 你的中继密钥" \
+  http://127.0.0.1:3000/api/relays
+```
+
+正常会返回已注册的中继列表。
+
+如果你仍然想手动写固定中继列表，也可以在主站使用 `FETCH_RELAYS`：
+
+```bash
+sudo RELAY_SECRET='你的中继密钥' \
+FETCH_RELAYS='http://美国VPS_IP:3000,http://日本VPS_IP:3000' \
+PORT=3000 \
+bash scripts/deploy-ubuntu.sh
+```
+
+## 7. 用户访问主站
 
 ```text
 http://主站VPS_IP:3000
@@ -92,7 +104,7 @@ http://主站VPS_IP:3000
 
 谁先成功拉到可转换节点，就使用谁。
 
-## 7. 测试中继是否可用
+## 8. 测试中继是否可用
 
 在主站 VPS 执行：
 
@@ -105,7 +117,7 @@ curl -H "Authorization: Bearer 你的中继密钥" \
 
 如果返回 JSON，并且里面有 `body` 字段，说明主站可以访问这个中继。
 
-## 8. 更换短链网站
+## 9. 更换短链网站
 
 默认短链接口：
 
@@ -141,7 +153,7 @@ form-data: longUrl=base64(长链接)
 }
 ```
 
-## 9. 常用命令
+## 10. 常用命令
 
 查看状态：
 
@@ -161,9 +173,10 @@ journalctl -u sub-converter -f
 systemctl restart sub-converter
 ```
 
-## 10. 注意
+## 11. 注意
 
 - 主站和中继的 `RELAY_SECRET` 必须一致。
+- 中继自动注册需要主站的 `3000` 端口可被中继访问。
 - 中继 VPS 的 `3000` 端口需要主站能访问。
 - 如果云厂商有安全组，需要放行 TCP `3000`。
 - 不要随便修改 `/etc/sub-converter.env` 里的 `SUB_TOKEN_SECRET`，否则旧的 `/sub/...` 订阅链接会失效。
