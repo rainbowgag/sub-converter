@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>机场订阅转换</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <div class="panel form-panel">
+          <div class="brand">
+            <div class="mark">S</div>
+            <div>
+              <h1>订阅转换</h1>
+              <p>输入机场链接，输出 Mihomo / Clash Meta 可用配置</p>
+            </div>
+          </div>
+
+          <label class="field">
+            <span>原始订阅链接</span>
+            <textarea id="url" rows="5" placeholder="https://example.com/api/v1/client/subscribe?token=..."></textarea>
+          </label>
+
+          <div class="grid">
+            <label class="field">
+              <span>输出模式</span>
+              <select id="outputMode">
+                <option value="proxies">仅 proxies</option>
+                <option value="full">完整 Mihomo 配置</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>流量提示节点</span>
+              <select id="infoNodes">
+                <option value="keep">保留</option>
+                <option value="remove">删除</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>节点关键词筛选</span>
+            <input id="keyword" type="text" placeholder="例如 Hong Kong、Japan、香港，可留空" />
+          </label>
+
+          <div class="actions">
+            <button id="convert" class="primary" type="button">转换并预览</button>
+            <button id="copySub" type="button" disabled>复制订阅链接</button>
+            <button id="shortenSub" type="button" disabled>生成短链接</button>
+          </div>
+
+          <div id="status" class="status idle">等待输入</div>
+        </div>
+
+        <div class="panel result-panel">
+          <div class="result-head">
+            <div>
+              <h2>输出预览</h2>
+              <p id="meta">尚未转换</p>
+            </div>
+            <button id="copyYaml" type="button" disabled>复制 YAML</button>
+          </div>
+          <pre id="preview">proxies:
+  - {"name":"示例节点","type":"anytls","server":"example.com","port":443,"password":"...","udp":true}</pre>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
