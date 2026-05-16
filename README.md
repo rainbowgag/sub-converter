@@ -117,7 +117,33 @@ curl -H "Authorization: Bearer 你的中继密钥" \
 
 如果返回 JSON，并且里面有 `body` 字段，说明主站可以访问这个中继。
 
-## 9. 更换短链网站
+## 9. 删除不需要的中继
+
+在主站 VPS 执行：
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer 你的中继密钥" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"http://要删除的中继VPS_IP:3000"}' \
+  http://127.0.0.1:3000/api/unregister-relay
+```
+
+然后查看列表确认：
+
+```bash
+curl -H "Authorization: Bearer 你的中继密钥" \
+  http://127.0.0.1:3000/api/relays
+```
+
+如果要彻底停掉那台中继 VPS，登录中继 VPS 执行：
+
+```bash
+systemctl stop sub-converter
+systemctl disable sub-converter
+```
+
+## 10. 更换短链网站
 
 默认短链接口：
 
@@ -153,7 +179,7 @@ form-data: longUrl=base64(长链接)
 }
 ```
 
-## 10. 常用命令
+## 11. 常用命令
 
 查看状态：
 
@@ -173,7 +199,7 @@ journalctl -u sub-converter -f
 systemctl restart sub-converter
 ```
 
-## 11. 注意
+## 12. 注意
 
 - 主站和中继的 `RELAY_SECRET` 必须一致。
 - 中继自动注册需要主站的 `3000` 端口可被中继访问。

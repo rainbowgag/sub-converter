@@ -134,6 +134,18 @@ async function registerRelay(relayUrl) {
   return item;
 }
 
+async function unregisterRelay(relayUrl) {
+  const normalized = normalizeRelayUrl(relayUrl);
+  const before = registeredRelays.length;
+  registeredRelays = registeredRelays.filter((relay) => relay.url !== normalized);
+  await saveRegisteredRelays();
+  return {
+    url: normalized,
+    removed: registeredRelays.length !== before,
+    count: registeredRelays.length,
+  };
+}
+
 function getClientIp(req) {
   return req.socket.remoteAddress || "unknown";
 }
@@ -964,6 +976,15 @@ export const server = http.createServer(async (req, res) => {
       if (!body.url || typeof body.url !== "string") return json(res, 400, { error: "Missing relay url" });
       const relay = await registerRelay(body.url);
       return json(res, 200, { relay, count: getRelayUrls().length });
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/unregister-relay") {
+      if (!RELAY_SECRET) return json(res, 403, { error: "Relay unregister is disabled" });
+      if (req.headers.authorization !== `Bearer ${RELAY_SECRET}`) return json(res, 401, { error: "Unauthorized relay unregister" });
+      const body = await readRequestJson(req);
+      if (!body.url || typeof body.url !== "string") return json(res, 400, { error: "Missing relay url" });
+      const result = await unregisterRelay(body.url);
+      return json(res, 200, result);
     }
 
     if (req.method === "GET" && requestUrl.pathname === "/api/relays") {
