@@ -6,6 +6,8 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${PORT:-3000}"
 HOST="${HOST:-0.0.0.0}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
+FETCH_RELAYS="${FETCH_RELAYS:-}"
+RELAY_SECRET="${RELAY_SECRET:-}"
 SERVICE_USER="${SERVICE_USER:-root}"
 ENV_FILE="/etc/${APP_NAME}.env"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
@@ -62,11 +64,18 @@ detect_public_base_url() {
 
 write_env_file() {
   local base_url="$1"
-  local secret
+  local secret relay_secret
   if [ -f "$ENV_FILE" ] && grep -q "^SUB_TOKEN_SECRET=" "$ENV_FILE"; then
     secret="$(grep "^SUB_TOKEN_SECRET=" "$ENV_FILE" | cut -d= -f2-)"
   else
     secret="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+  fi
+  if [ -n "$RELAY_SECRET" ]; then
+    relay_secret="$RELAY_SECRET"
+  elif [ -f "$ENV_FILE" ] && grep -q "^RELAY_SECRET=" "$ENV_FILE"; then
+    relay_secret="$(grep "^RELAY_SECRET=" "$ENV_FILE" | cut -d= -f2-)"
+  else
+    relay_secret="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
   fi
 
   cat > "$ENV_FILE" <<EOF
@@ -74,6 +83,8 @@ PORT=${PORT}
 HOST=${HOST}
 PUBLIC_BASE_URL=${base_url}
 SUB_TOKEN_SECRET=${secret}
+RELAY_SECRET=${relay_secret}
+FETCH_RELAYS=${FETCH_RELAYS}
 RAW_CACHE_TTL_MS=600000
 OUTPUT_CACHE_TTL_MS=600000
 STALE_CACHE_TTL_MS=86400000

@@ -13,6 +13,11 @@ const TOKEN_SECRET = crypto
   .createHash("sha256")
   .update(process.env.SUB_TOKEN_SECRET || "local-development-secret-change-me")
   .digest();
+const RELAY_SECRET = process.env.RELAY_SECRET || "";
+const FETCH_RELAYS = (process.env.FETCH_RELAYS || "")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
 
 const RAW_TTL_MS = Number(process.env.RAW_CACHE_TTL_MS || 10 * 60 * 1000);
 const OUTPUT_TTL_MS = Number(process.env.OUTPUT_CACHE_TTL_MS || 10 * 60 * 1000);
@@ -210,6 +215,44 @@ async function fetchUpstream(subUrl) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchUpstreamViaRelay(relayBase, subUrl) {
+  if (!RELAY_SECRET) throw new Error("未配置 RELAY_SECRET，无法使用中继拉取");
+  const relayUrl = new URL("/api/relay-fetch", relayBase);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS + 3000);
+  try {
+    const response = await fetch(relayUrl, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${RELAY_SECRET}`,
+      },
+      body: JSON.stringify({ url: subUrl }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `中继 ${relayBase} 返回 HTTP ${response.status}`);
+    if (!data.body || typeof data.body !== "string") throw new Error(`中继 ${relayBase} 没有返回订阅内容`);
+    return {
+      body: Buffer.from(data.body, "base64").toString("utf8").trim(),
+      stale: Boolean(data.stale),
+      warning: data.warning,
+      source: relayBase,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchRelayBody(subUrl) {
+  const upstream = await fetchUpstream(subUrl);
+  return {
+    body: Buffer.from(upstream.body, "utf8").toString("base64"),
+    stale: upstream.stale,
+    warning: upstream.warning,
+  };
 }
 
 function encryptToken(payload) {
@@ -578,6 +621,13 @@ export function parseSubscription(text) {
   return [];
 }
 
+function previewText(text, maxLength = 140) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
 function isInfoNode(node) {
   return /traffic|expire|reset|\bgb\b|\bmb\b|流量|到期|重置|剩余/i.test(node.name);
 }
@@ -590,6 +640,32 @@ function applyOptions(nodes, options = {}) {
     if (keyword) output = output.filter((node) => node.name.toLowerCase().includes(keyword));
   }
   return output.slice(0, MAX_NODES);
+}
+
+async function fetchAndParseWithFallback(url, options) {
+  const attempts = [];
+  const sources = [{ type: "direct", label: "direct" }, ...FETCH_RELAYS.map((relay) => ({ type: "relay", label: relay }))];
+
+  for (const source of sources) {
+    try {
+      const upstream = source.type === "direct" ? await fetchUpstream(url) : await fetchUpstreamViaRelay(source.label, url);
+      const parsed = parseSubscription(upstream.body);
+      const nodes = applyOptions(parsed, options);
+      if (nodes.length) {
+        return {
+          nodes,
+          warning: upstream.warning,
+          stale: upstream.stale,
+          source: source.label,
+        };
+      }
+      attempts.push(`${source.label}: no nodes, upstream preview: ${previewText(upstream.body) || "empty response"}`);
+    } catch (error) {
+      attempts.push(`${source.label}: ${error instanceof Error ? error.message : "fetch failed"}`);
+    }
+  }
+
+  throw new Error(`No convertible nodes found. Attempts: ${attempts.join("; ")}`);
 }
 
 function toMihomoNode(node) {
@@ -682,6 +758,25 @@ async function convertSubscription({ url, options = {} }) {
   };
 }
 
+async function convertSubscriptionWithRelays({ url, options = {} }) {
+  const outputMode = options.outputMode === "full" ? "full" : "proxies";
+  const cacheKey = hash(JSON.stringify({ url, relays: FETCH_RELAYS, options: { ...options, outputMode } }));
+  const cached = cacheGet(outputCache, cacheKey, true);
+  if (cached && !cached.stale) return { yaml: cached.value, cached: true, stale: false };
+
+  const result = await fetchAndParseWithFallback(url, options);
+  const yaml = outputMode === "full" ? renderFullConfig(result.nodes, result.warning) : renderProxiesOnly(result.nodes, result.warning);
+  cacheSet(outputCache, cacheKey, yaml, OUTPUT_TTL_MS, STALE_TTL_MS);
+  return {
+    yaml,
+    count: result.nodes.length,
+    cached: false,
+    stale: result.stale,
+    warning: result.warning,
+    source: result.source,
+  };
+}
+
 function base64Utf8(value) {
   return Buffer.from(value, "utf8").toString("base64");
 }
@@ -760,7 +855,7 @@ export const server = http.createServer(async (req, res) => {
         infoNodes: body.infoNodes === "remove" ? "remove" : "keep",
         keyword: body.keyword || "",
       };
-      const result = await convertSubscription({ url: body.url, options });
+      const result = await convertSubscriptionWithRelays({ url: body.url, options });
       const token = encryptToken({ url: body.url, options, createdAt: now() });
       return json(res, 200, {
         ...result,
@@ -775,10 +870,19 @@ export const server = http.createServer(async (req, res) => {
       return json(res, 200, { shortUrl });
     }
 
+    if (req.method === "POST" && requestUrl.pathname === "/api/relay-fetch") {
+      if (!RELAY_SECRET) return json(res, 403, { error: "Relay is disabled" });
+      if (req.headers.authorization !== `Bearer ${RELAY_SECRET}`) return json(res, 401, { error: "Unauthorized relay request" });
+      const body = await readRequestJson(req);
+      if (!body.url || typeof body.url !== "string") return json(res, 400, { error: "Missing upstream url" });
+      const result = await fetchRelayBody(body.url);
+      return json(res, 200, result);
+    }
+
     if (req.method === "GET" && requestUrl.pathname.startsWith("/sub/")) {
       const token = requestUrl.pathname.slice("/sub/".length);
       const payload = decryptToken(token);
-      const result = await convertSubscription(payload);
+      const result = await convertSubscriptionWithRelays(payload);
       return text(res, 200, result.yaml, {
         "subscription-userinfo": "upload=0; download=0; total=0; expire=0",
       });

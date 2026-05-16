@@ -44,6 +44,8 @@ http://服务器IP:3000
 
 访问。更多说明见 [DEPLOY.md](DEPLOY.md)。
 
+支持多 VPS 中继拉取。主站可配置 `FETCH_RELAYS`，当当前 VPS 被机场风控、拉不到节点时，自动切换到其他 VPS 代拉。配置方法见 [DEPLOY.md](DEPLOY.md)。
+
 ## 生产建议
 
 - 设置 `SUB_TOKEN_SECRET`，不要使用默认开发密钥。
