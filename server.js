@@ -18,6 +18,7 @@ const FETCH_RELAYS = (process.env.FETCH_RELAYS || "")
   .split(",")
   .map((item) => item.trim())
   .filter(Boolean);
+const SHORTENER_ENDPOINT = process.env.SHORTENER_ENDPOINT || "https://d.flysub.org/short";
 
 const RAW_TTL_MS = Number(process.env.RAW_CACHE_TTL_MS || 10 * 60 * 1000);
 const OUTPUT_TTL_MS = Number(process.env.OUTPUT_CACHE_TTL_MS || 10 * 60 * 1000);
@@ -642,24 +643,56 @@ function applyOptions(nodes, options = {}) {
   return output.slice(0, MAX_NODES);
 }
 
+async function fetchSourceAndParse(source, url, options) {
+  const upstream = source.type === "direct" ? await fetchUpstream(url) : await fetchUpstreamViaRelay(source.label, url);
+  const parsed = parseSubscription(upstream.body);
+  const nodes = applyOptions(parsed, options);
+  if (!nodes.length) {
+    throw new Error(`no nodes, upstream preview: ${previewText(upstream.body) || "empty response"}`);
+  }
+  return {
+    nodes,
+    warning: upstream.warning,
+    stale: upstream.stale,
+    source: source.label,
+  };
+}
+
 async function fetchAndParseWithFallback(url, options) {
   const attempts = [];
   const sources = [{ type: "direct", label: "direct" }, ...FETCH_RELAYS.map((relay) => ({ type: "relay", label: relay }))];
 
+  if (FETCH_RELAYS.length) {
+    const pending = sources.map((source) =>
+      fetchSourceAndParse(source, url, options)
+        .then((result) => ({ ok: true, result }))
+        .catch((error) => ({
+          ok: false,
+          attempt: `${source.label}: ${error instanceof Error ? error.message : "fetch failed"}`,
+        })),
+    );
+
+    return await new Promise((resolve, reject) => {
+      let settled = 0;
+      for (const task of pending) {
+        task.then((outcome) => {
+          settled += 1;
+          if (outcome.ok) {
+            resolve(outcome.result);
+            return;
+          }
+          attempts.push(outcome.attempt);
+          if (settled === pending.length) {
+            reject(new Error(`No convertible nodes found. Attempts: ${attempts.join("; ")}`));
+          }
+        });
+      }
+    });
+  }
+
   for (const source of sources) {
     try {
-      const upstream = source.type === "direct" ? await fetchUpstream(url) : await fetchUpstreamViaRelay(source.label, url);
-      const parsed = parseSubscription(upstream.body);
-      const nodes = applyOptions(parsed, options);
-      if (nodes.length) {
-        return {
-          nodes,
-          warning: upstream.warning,
-          stale: upstream.stale,
-          source: source.label,
-        };
-      }
-      attempts.push(`${source.label}: no nodes, upstream preview: ${previewText(upstream.body) || "empty response"}`);
+      return await fetchSourceAndParse(source, url, options);
     } catch (error) {
       attempts.push(`${source.label}: ${error instanceof Error ? error.message : "fetch failed"}`);
     }
@@ -798,7 +831,7 @@ async function shortenUrl(longUrl) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch("https://d.flysub.org/short", {
+    const response = await fetch(SHORTENER_ENDPOINT, {
       method: "POST",
       body: form,
       signal: controller.signal,

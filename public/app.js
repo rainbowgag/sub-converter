@@ -19,9 +19,38 @@ function setStatus(message, type = "idle") {
   statusBox.textContent = message;
 }
 
+function fallbackCopy(value) {
+  const area = document.createElement("textarea");
+  area.value = value;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.left = "-9999px";
+  document.body.appendChild(area);
+  area.select();
+  const ok = document.execCommand("copy");
+  document.body.removeChild(area);
+  return ok;
+}
+
 async function copyText(value, label) {
-  await navigator.clipboard.writeText(value);
-  setStatus(`${label}已复制`, "ok");
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      setStatus(`${label}已复制`, "ok");
+      return true;
+    }
+  } catch {
+    // Fall through to the legacy copy path.
+  }
+
+  if (fallbackCopy(value)) {
+    setStatus(`${label}已复制`, "ok");
+    return true;
+  }
+
+  setStatus(`${label}：${value}`, "warn");
+  return false;
 }
 
 convert.addEventListener("click", async () => {
@@ -55,7 +84,7 @@ convert.addEventListener("click", async () => {
     latestSubUrl = data.subscribeUrl;
     latestShortUrl = "";
     preview.textContent = latestYaml;
-    meta.textContent = `${data.count || 0} 个节点 · ${data.cached ? "命中缓存" : "重新转换"}${data.stale ? " · 使用旧缓存兜底" : ""}`;
+    meta.textContent = `${data.count || 0} 个节点 · ${data.cached ? "命中缓存" : "重新转换"}${data.source ? ` · 来源 ${data.source}` : ""}${data.stale ? " · 使用旧缓存兜底" : ""}`;
     copySub.disabled = false;
     shortenSub.disabled = false;
     copyYaml.disabled = false;
@@ -90,9 +119,10 @@ shortenSub.addEventListener("click", async () => {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "短链接生成失败");
+
     latestShortUrl = data.shortUrl;
-    await navigator.clipboard.writeText(latestShortUrl);
-    setStatus(`短链接已生成并复制：${latestShortUrl}`, "ok");
+    const copied = await copyText(latestShortUrl, "短链接");
+    if (!copied) setStatus(`短链接已生成，请手动复制：${latestShortUrl}`, "warn");
   } catch (error) {
     const message = error instanceof Error ? error.message : "短链接生成失败";
     setStatus(message, "error");
