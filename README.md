@@ -1,89 +1,138 @@
-# 机场订阅转换网站
+# sub-converter
 
-输入机场订阅链接，自动识别常见订阅格式，输出 Mihomo / Clash Meta 可用的 `proxies:` YAML 或完整配置。
+机场订阅转换网站。支持把机场订阅转换成 Mihomo / Clash Meta 可用配置，并支持多个 VPS 中继自动拉取。
 
-## 功能
+## 1. 主站 VPS 安装基础工具
 
-- 支持 Clash YAML、Base64 URI 列表、纯文本 URI 列表、部分 sing-box JSON。
-- 支持 `ss`、`vmess`、`vless`、`trojan`、`hysteria`、`hysteria2`、`tuic`、`anytls` 的基础字段转换。
-- 支持多 VPS 中继拉取。当前 VPS 被机场风控时，可自动切换其他 VPS 代拉。
-- 使用内存短缓存，减少上游机场请求压力。
-- 生成加密订阅链接 `/sub/{token}`，不把原始订阅 URL 明文放在路径里。
-- 内置 SSRF 防护、响应体大小限制、请求超时、简单限流。
-- 支持调用短链服务生成短链接。
-
-## 本地运行
+Debian / Ubuntu 执行：
 
 ```bash
-npm run dev
+apt-get update
+apt-get install -y git curl ca-certificates
 ```
 
-如果 PowerShell 禁止 `npm.ps1`，可以运行：
+## 2. 主站 VPS 一键部署
 
-```powershell
-npm.cmd run dev
+```bash
+git clone https://github.com/rainbowgag/sub-converter.git
+cd sub-converter
+sudo PORT=3000 bash scripts/deploy-ubuntu.sh
 ```
 
-打开：
+部署完成后访问：
 
 ```text
-http://127.0.0.1:3000
+http://主站VPS_IP:3000
 ```
 
-## VPS 一键部署
+## 3. 生成中继密钥
 
-Debian / Ubuntu 服务器可以直接运行：
+在主站或任意一台 VPS 执行一次：
 
 ```bash
-sudo bash scripts/deploy-ubuntu.sh
+openssl rand -hex 32
 ```
 
-脚本会自动检查并安装 Node.js 20，创建 systemd 服务，最后用：
+复制输出的长字符串。主站和所有中继 VPS 都要使用同一个 `RELAY_SECRET`。
 
-```text
-http://服务器IP:3000
-```
+## 4. 中继 VPS 安装基础工具
 
-访问。更多说明见 [DEPLOY.md](DEPLOY.md)。
-
-## 多 VPS 中继
-
-主站可配置 `FETCH_RELAYS`，当当前 VPS 被机场风控、拉不到节点时，自动切换到其他 VPS 代拉。
+每台中继 VPS 都先执行：
 
 ```bash
-sudo RELAY_SECRET='你的共享密钥' \
-FETCH_RELAYS='http://美国VPS_IP:3000,http://日本VPS_IP:3000' \
+apt-get update
+apt-get install -y git curl ca-certificates
+```
+
+## 5. 中继 VPS 一键部署
+
+把 `你的中继密钥` 换成第 3 步生成的密钥：
+
+```bash
+git clone https://github.com/rainbowgag/sub-converter.git
+cd sub-converter
+sudo RELAY_SECRET='你的中继密钥' PORT=3000 bash scripts/deploy-ubuntu.sh
+```
+
+如果已经部署过，只需要更新：
+
+```bash
+cd ~/sub-converter
+git pull
+sudo RELAY_SECRET='你的中继密钥' PORT=3000 bash scripts/deploy-ubuntu.sh
+```
+
+## 6. 主站配置中继列表
+
+回到主站 VPS，把所有中继 VPS 地址填进 `FETCH_RELAYS`。
+
+示例：
+
+```bash
+cd ~/sub-converter
+git pull
+
+sudo RELAY_SECRET='你的中继密钥' \
+FETCH_RELAYS='http://美国VPS_IP:3000,http://日本VPS_IP:3000,http://德国VPS_IP:3000' \
+PORT=3000 \
 bash scripts/deploy-ubuntu.sh
 ```
 
-中继 VPS 只需要配置同一个 `RELAY_SECRET`：
+之后用户只访问主站：
 
-```bash
-sudo RELAY_SECRET='你的共享密钥' bash scripts/deploy-ubuntu.sh
+```text
+http://主站VPS_IP:3000
 ```
 
-## 更换短链网站
+主站会自动尝试：
 
-默认短链接口是：
+```text
+主站自己 -> 中继1 -> 中继2 -> 中继3
+```
+
+谁先成功拉到可转换节点，就使用谁。
+
+## 7. 测试中继是否可用
+
+在主站 VPS 执行：
+
+```bash
+curl -H "Authorization: Bearer 你的中继密钥" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com"}' \
+  http://中继VPS_IP:3000/api/relay-fetch
+```
+
+如果返回 JSON，并且里面有 `body` 字段，说明主站可以访问这个中继。
+
+## 8. 更换短链网站
+
+默认短链接口：
 
 ```text
 https://d.flysub.org/short
 ```
 
-如果要更换短链网站，修改环境变量 `SHORTENER_ENDPOINT`：
+如果要换短链网站，在主站 VPS 执行：
 
 ```bash
-sudo SHORTENER_ENDPOINT='https://你的短链域名/short' bash scripts/deploy-ubuntu.sh
+cd ~/sub-converter
+
+sudo SHORTENER_ENDPOINT='https://你的短链域名/short' \
+RELAY_SECRET='你的中继密钥' \
+FETCH_RELAYS='http://美国VPS_IP:3000,http://日本VPS_IP:3000' \
+PORT=3000 \
+bash scripts/deploy-ubuntu.sh
 ```
 
-代码位置在 [server.js](server.js) 的 `SHORTENER_ENDPOINT`。当前接口格式兼容 MyUrls / d.flysub.org：
+短链接口需要兼容下面格式：
 
 ```text
 POST /short
 form-data: longUrl=base64(长链接)
 ```
 
-返回需要包含：
+返回格式：
 
 ```json
 {
@@ -92,10 +141,29 @@ form-data: longUrl=base64(长链接)
 }
 ```
 
-## 生产建议
+## 9. 常用命令
 
-- 设置固定 `SUB_TOKEN_SECRET`，不要使用默认开发密钥。
-- 不要随便修改 `SUB_TOKEN_SECRET`，否则旧的 `/sub/...` 链接会失效。
-- 用 Redis 替换内存缓存，保留 5-10 分钟 TTL。
-- 反向代理层增加 HTTPS、请求速率限制和访问日志脱敏。
-- 不要记录原始订阅 URL、节点密码、UUID。
+查看状态：
+
+```bash
+systemctl status sub-converter --no-pager
+```
+
+查看日志：
+
+```bash
+journalctl -u sub-converter -f
+```
+
+重启：
+
+```bash
+systemctl restart sub-converter
+```
+
+## 10. 注意
+
+- 主站和中继的 `RELAY_SECRET` 必须一致。
+- 中继 VPS 的 `3000` 端口需要主站能访问。
+- 如果云厂商有安全组，需要放行 TCP `3000`。
+- 不要随便修改 `/etc/sub-converter.env` 里的 `SUB_TOKEN_SECRET`，否则旧的 `/sub/...` 订阅链接会失效。
