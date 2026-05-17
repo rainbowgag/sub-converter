@@ -11,8 +11,12 @@ RELAY_SECRET="${RELAY_SECRET:-}"
 SHORTENER_ENDPOINT="${SHORTENER_ENDPOINT:-https://d.flysub.org/short}"
 MAIN_SERVER="${MAIN_SERVER:-}"
 SERVICE_USER="${SERVICE_USER:-root}"
+JOURNAL_SYSTEM_MAX_USE="${JOURNAL_SYSTEM_MAX_USE:-100M}"
+JOURNAL_SYSTEM_KEEP_FREE="${JOURNAL_SYSTEM_KEEP_FREE:-500M}"
+JOURNAL_MAX_RETENTION_SEC="${JOURNAL_MAX_RETENTION_SEC:-7day}"
 ENV_FILE="/etc/${APP_NAME}.env"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
+JOURNALD_LIMIT_FILE="/etc/systemd/journald.conf.d/99-${APP_NAME}-limits.conf"
 EFFECTIVE_RELAY_SECRET=""
 
 need_root() {
@@ -127,6 +131,17 @@ open_firewall_port() {
   fi
 }
 
+configure_journal_limits() {
+  mkdir -p "$(dirname "$JOURNALD_LIMIT_FILE")"
+  cat > "$JOURNALD_LIMIT_FILE" <<EOF
+[Journal]
+SystemMaxUse=${JOURNAL_SYSTEM_MAX_USE}
+SystemKeepFree=${JOURNAL_SYSTEM_KEEP_FREE}
+MaxRetentionSec=${JOURNAL_MAX_RETENTION_SEC}
+EOF
+  systemctl restart systemd-journald || true
+}
+
 register_to_main_server() {
   if [ -z "$MAIN_SERVER" ]; then
     return
@@ -159,6 +174,7 @@ main() {
   base_url="$(detect_public_base_url)"
   write_env_file "$base_url"
   write_service_file
+  configure_journal_limits
   open_firewall_port
 
   systemctl daemon-reload

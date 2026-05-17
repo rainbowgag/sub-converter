@@ -19,6 +19,14 @@ cd sub-converter
 sudo PORT=3000 bash scripts/deploy-ubuntu.sh
 ```
 
+部署脚本会自动限制 systemd 日志大小：
+
+```text
+SystemMaxUse=100M
+SystemKeepFree=500M
+MaxRetentionSec=7day
+```
+
 部署完成后访问：
 
 ```text
@@ -199,10 +207,43 @@ journalctl -u sub-converter -f
 systemctl restart sub-converter
 ```
 
-## 12. 注意
+查看日志占用：
+
+```bash
+journalctl --disk-usage
+```
+
+手动清理旧日志：
+
+```bash
+journalctl --vacuum-size=100M
+```
+
+## 12. 自定义日志限制
+
+主站和中继都使用同一个部署脚本，所以都支持下面这些环境变量：
+
+```bash
+sudo JOURNAL_SYSTEM_MAX_USE=50M \
+JOURNAL_SYSTEM_KEEP_FREE=500M \
+JOURNAL_MAX_RETENTION_SEC=3day \
+PORT=3000 \
+bash scripts/deploy-ubuntu.sh
+```
+
+含义：
+
+```text
+JOURNAL_SYSTEM_MAX_USE     systemd journal 最大占用
+JOURNAL_SYSTEM_KEEP_FREE   磁盘至少保留多少空闲空间
+JOURNAL_MAX_RETENTION_SEC  日志最长保留时间
+```
+
+## 13. 注意
 
 - 主站和中继的 `RELAY_SECRET` 必须一致。
 - 中继自动注册需要主站的 `3000` 端口可被中继访问。
 - 中继 VPS 的 `3000` 端口需要主站能访问。
 - 如果云厂商有安全组，需要放行 TCP `3000`。
 - 不要随便修改 `/etc/sub-converter.env` 里的 `SUB_TOKEN_SECRET`，否则旧的 `/sub/...` 订阅链接会失效。
+- 部署脚本会写入 `/etc/systemd/journald.conf.d/99-sub-converter-limits.conf`，这是 systemd journal 的全局日志限制。
