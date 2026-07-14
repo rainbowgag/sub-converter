@@ -29,8 +29,37 @@ const base64 = Buffer.from(anytlsUri).toString("base64");
 assert.equal(parseSubscription(base64).length, 1);
 
 const output = renderProxiesOnly(uriNodes);
-assert.match(output, /^proxies:\n  - \{"name":"AnyTLS 01"/);
-assert.match(output, /"type":"anytls"/);
+assert.match(output, /^proxies:\n  - \{name: AnyTLS 01/);
+assert.match(output, /type: anytls/);
+assert.match(output, /sni: edge\.example\.com/);
+assert.doesNotMatch(output, /servername:/);
+
+const vlessNodes = [
+  {
+    name: "德国h1",
+    type: "vless",
+    server: "d.yaml.uk",
+    port: 11113,
+    uuid: "00b0bbb6-ff52-4779-b137-2396296916d5",
+    udp: true,
+    tls: true,
+    network: "tcp",
+    sni: "www.amazon.com",
+    "client-fingerprint": "chrome",
+    "skip-cert-verify": false,
+    "reality-opts": {
+      "public-key": "GV0Lx81lKuoTIMoXIHHYQmXJNvTORubEHx9Lc0TSrUo",
+      "short-id": "8fac",
+      "spider-x": "/pEtwL3jOcDvkqfq",
+    },
+  },
+];
+const vlessOutput = renderProxiesOnly(vlessNodes);
+assert.match(vlessOutput, /- \{name: 德国h1, type: vless, server: d\.yaml\.uk, port: 11113/);
+assert.match(vlessOutput, /servername: www\.amazon\.com/);
+assert.doesNotMatch(vlessOutput, /"name"/);
+assert.doesNotMatch(vlessOutput, /sni:/);
+assert.match(vlessOutput, /reality-opts: \{public-key: GV0Lx81lKuoTIMoXIHHYQmXJNvTORubEHx9Lc0TSrUo, short-id: 8fac, spider-x: \/pEtwL3jOcDvkqfq\}/);
 
 const ssrdogPath = "E:/E/谷歌下载/SSRDOG";
 if (fs.existsSync(ssrdogPath)) {

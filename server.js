@@ -759,6 +759,8 @@ async function fetchAndParseWithFallback(url, options) {
 }
 
 function toMihomoNode(node) {
+  const output = {};
+  const serverName = node.type === "vless" ? node.servername || node.sni : node.servername;
   const allowed = [
     "name",
     "type",
@@ -772,6 +774,7 @@ function toMihomoNode(node) {
     "tls",
     "network",
     "flow",
+    "servername",
     "sni",
     "client-fingerprint",
     "skip-cert-verify",
@@ -779,11 +782,46 @@ function toMihomoNode(node) {
     "obfs",
     "obfs-password",
   ];
-  const output = {};
   for (const key of allowed) {
+    if (key === "servername" && serverName) {
+      output.servername = serverName;
+      continue;
+    }
+    if (key === "sni" && node.type === "vless" && serverName) continue;
     if (node[key] !== undefined && node[key] !== null && node[key] !== "") output[key] = node[key];
   }
   return output;
+}
+
+function isPlainYamlScalar(value) {
+  if (!value) return false;
+  if (/^(true|false|null|~)$/i.test(value)) return false;
+  if (/^[+-]?(\d+|\d+\.\d+)$/.test(value)) return false;
+  if (/[:#,[\]{}&*!|>'"%@`]/.test(value)) return false;
+  if (/^\s|\s$/.test(value)) return false;
+  return /^[\p{L}\p{N}_.\-\/]+(?: [\p{L}\p{N}_.\-\/]+)*$/u.test(value);
+}
+
+function yamlFlowValue(value) {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return `[${value.map((item) => yamlFlowValue(item)).join(", ")}]`;
+  if (typeof value === "object") {
+    return `{${Object.entries(value)
+      .filter(([, item]) => item !== undefined && item !== null && item !== "")
+      .map(([key, item]) => `${key}: ${yamlFlowValue(item)}`)
+      .join(", ")}}`;
+  }
+  const text = String(value);
+  if (isPlainYamlScalar(text)) return text;
+  return `'${text.replace(/'/g, "''")}'`;
+}
+
+function renderYamlFlowMap(value) {
+  return `{${Object.entries(value)
+    .filter(([, item]) => item !== undefined && item !== null && item !== "")
+    .map(([key, item]) => `${key}: ${yamlFlowValue(item)}`)
+    .join(", ")}}`;
 }
 
 export function renderProxiesOnly(nodes, warning) {
@@ -791,7 +829,7 @@ export function renderProxiesOnly(nodes, warning) {
   if (warning) lines.push(`# Warning: upstream fetch failed, served stale cache. ${warning}`);
   lines.push("proxies:");
   for (const node of nodes) {
-    lines.push(`  - ${JSON.stringify(toMihomoNode(node))}`);
+    lines.push(`  - ${renderYamlFlowMap(toMihomoNode(node))}`);
   }
   return `${lines.join("\n")}\n`;
 }
